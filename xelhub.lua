@@ -32,7 +32,6 @@ if CURRENT_GAME == "UNSUPPORTED" then
     warnGui.Name = "xelhub_warn"
     warnGui.ResetOnSpawn = false
     warnGui.Parent = pg
-
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(0, 380, 0, 140)
     frame.Position = UDim2.new(0.5, -190, 0.5, -70)
@@ -40,11 +39,9 @@ if CURRENT_GAME == "UNSUPPORTED" then
     frame.BorderSizePixel = 0
     frame.Parent = warnGui
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 4)
-
     local stroke = Instance.new("UIStroke", frame)
     stroke.Color = Color3.fromRGB(220, 170, 90)
     stroke.Thickness = 1
-
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 20)
@@ -54,7 +51,6 @@ if CURRENT_GAME == "UNSUPPORTED" then
     title.Font = Enum.Font.Code
     title.TextSize = 20
     title.Parent = frame
-
     local msg = Instance.new("TextLabel")
     msg.Size = UDim2.new(1, -20, 0, 60)
     msg.Position = UDim2.new(0, 10, 0, 55)
@@ -65,7 +61,6 @@ if CURRENT_GAME == "UNSUPPORTED" then
     msg.TextSize = 12
     msg.TextWrapped = true
     msg.Parent = frame
-
     task.wait(3)
     warnGui:Destroy()
     return
@@ -268,7 +263,6 @@ local function buildESPFor(character)
     end
 end
 
--- Tight Gun ESP: only shows tools that are NOT in a player's hand/inventory
 local function buildGunESP()
     if CURRENT_GAME ~= "MM2" or not S.espGun then return end
     for _, obj in ipairs(workspace:GetDescendants()) do
@@ -320,19 +314,25 @@ local function refreshESP()
 end
 
 -- ============================================================
--- TSB COMBAT
+-- TSB COMBAT (upgraded — randomized routes, block-bail)
 -- ============================================================
 local HUNT = {
     FarDash = 45, MidWalk = 18, StrikeRange = 7,
     DashCooldown = 0.35, DashHold = 0.12,
-    M1Delay = 0.105, SkillDelay = 0.14,
-    PostCombo = 0.05, StuckTime = 1.2, MissBail = 2,
-    LeadFactor = 0.20, SideStepOdds = 0.4, HitRecovery = 0.25,
+    PostCombo = 0.05, StuckTime = 1.8, MissBail = 1,
+    LeadFactor = 0.25, SideStepOdds = 0.5, HitRecovery = 0.20,
+}
+
+local COMBO_ROUTES = {
+    {"M1","M1","M1","SLAM","4","SIDE","M1","M1","M1","2","3","FWD","M1","M1","M1","1"},
+    {"M1","M1","SLAM","4","SIDE","M1","M1","M1","2","FWD","3","M1","M1","1"},
+    {"M1","M1","M1","2","SIDE","M1","M1","3","FWD","M1","M1","1"},
 }
 
 local _stuckDist, _stuckTime = nil, 0
 local _lastHealth = nil
 local _lastHitTime = 0
+local _lastRoute = 0
 
 task.spawn(function()
     while true do
@@ -362,6 +362,7 @@ local function autoDash(side)
     S.lastDash = now
     local dirKey = side and (math.random() < 0.5 and Enum.KeyCode.A or Enum.KeyCode.D) or Enum.KeyCode.W
     holdKey(dirKey, HUNT.DashHold)
+    task.wait(math.random() * 0.04)
     pressKey(Enum.KeyCode.Q)
 end
 
@@ -384,48 +385,90 @@ local function approach(target)
     else
         _stuckDist = dist; _stuckTime = tick()
     end
-    if dist <= HUNT.StrikeRange then S.hum:MoveTo(me.Position)
-    elseif dist <= HUNT.MidWalk then S.hum:MoveTo(target.Position); if math.random() < 0.15 then autoDash(true) end
-    elseif dist <= HUNT.FarDash then autoDash(math.random() < HUNT.SideStepOdds); S.hum:MoveTo(target.Position)
-    else S.hum:MoveTo(target.Position) end
+    if dist <= HUNT.StrikeRange then
+        S.hum:MoveTo(me.Position)
+    elseif dist <= HUNT.MidWalk then
+        S.hum:MoveTo(target.Position)
+        if math.random() < 0.2 then autoDash(true) end
+    elseif dist <= HUNT.FarDash then
+        autoDash(math.random() < HUNT.SideStepOdds)
+        S.hum:MoveTo(target.Position)
+    else
+        S.hum:MoveTo(target.Position)
+    end
+end
+
+local function pickRoute()
+    local idx
+    repeat
+        idx = math.random(1, #COMBO_ROUTES)
+    until idx ~= _lastRoute or #COMBO_ROUTES == 1
+    _lastRoute = idx
+    return COMBO_ROUTES[idx]
 end
 
 local function fireCombo()
     if S.busy then return end
     S.busy = true
     task.spawn(function()
-        local function getTargetHP()
-            if not S.target or not S.target.Parent then return nil end
-            local h = S.target.Parent:FindFirstChildOfClass("Humanoid")
-            return h and h.Health or nil
-        end
         local function shouldBail()
             if not humanoidHealthy() then return true end
             if not S.target or not S.target.Parent then return true end
             return false
         end
+        local function getTargetHP()
+            if not S.target or not S.target.Parent then return nil end
+            local h = S.target.Parent:FindFirstChildOfClass("Humanoid")
+            return h and h.Health or nil
+        end
+
         pcall(function()
+            local route = pickRoute()
             local hpStart = getTargetHP()
-            local misses = 0
-            for i = 1, 3 do
+            local m1sSinceCheck = 0
+
+            for _, step in ipairs(route) do
                 if shouldBail() then return end
-                clickM1(); task.wait(HUNT.M1Delay)
-                local hpNow = getTargetHP()
-                if hpStart and hpNow and hpNow >= hpStart then
-                    misses = misses + 1
-                    if misses >= HUNT.MissBail then autoDash(true); return end
-                else misses = 0; hpStart = hpNow end
+
+                if step == "M1" then
+                    clickM1()
+                    m1sSinceCheck = m1sSinceCheck + 1
+                    task.wait(0.105 + math.random() * 0.025)
+
+                    if m1sSinceCheck >= 1 then
+                        local hpNow = getTargetHP()
+                        if hpStart and hpNow and hpNow >= hpStart then
+                            S.busy = false
+                            autoDash(true)
+                            return
+                        end
+                        hpStart = hpNow
+                        m1sSinceCheck = 0
+                    end
+                elseif step == "SLAM" then
+                    holdKey(Enum.KeyCode.Space, 0.10)
+                    clickM1()
+                    task.wait(0.14 + math.random() * 0.03)
+                elseif step == "SIDE" then
+                    autoDash(true)
+                    task.wait(0.12)
+                elseif step == "FWD" then
+                    autoDash(false)
+                    task.wait(0.12)
+                else
+                    local keyMap = {
+                        ["1"] = Enum.KeyCode.One,
+                        ["2"] = Enum.KeyCode.Two,
+                        ["3"] = Enum.KeyCode.Three,
+                        ["4"] = Enum.KeyCode.Four,
+                    }
+                    if keyMap[step] then
+                        pressKey(keyMap[step])
+                        task.wait(0.14 + math.random() * 0.03)
+                    end
+                end
             end
-            if shouldBail() then return end
-            holdKey(Enum.KeyCode.Space, 0.10); clickM1(); task.wait(HUNT.SkillDelay)
-            pressKey(Enum.KeyCode.Four); task.wait(HUNT.SkillDelay)
-            autoDash(true); task.wait(HUNT.SkillDelay)
-            for i = 1, 3 do if shouldBail() then return end clickM1(); task.wait(HUNT.M1Delay) end
-            pressKey(Enum.KeyCode.Two); task.wait(HUNT.SkillDelay)
-            pressKey(Enum.KeyCode.Three); task.wait(HUNT.SkillDelay)
-            autoDash(false); task.wait(HUNT.SkillDelay)
-            for i = 1, 3 do if shouldBail() then return end clickM1(); task.wait(HUNT.M1Delay) end
-            pressKey(Enum.KeyCode.One); task.wait(0.10)
+            task.wait(0.10)
         end)
         S.busy = false
     end)
@@ -435,7 +478,8 @@ if CURRENT_GAME == "TSB" then
     task.spawn(function()
         while true do
             if S.autoFight and humanoidHealthy() then
-                if justGotHit() then task.wait(0.05)
+                if justGotHit() then
+                    task.wait(0.03)
                 else
                     local me = hrp()
                     if not S.target or not S.target.Parent or not isValidTarget(S.target.Parent, true)
@@ -446,11 +490,18 @@ if CURRENT_GAME == "TSB" then
                         approach(S.target)
                         local dist = (S.target.Position - me.Position).Magnitude
                         if dist <= HUNT.StrikeRange + 1 and not isMoving() then
-                            fireCombo(); task.wait(HUNT.PostCombo)
-                        else task.wait(0.02) end
-                    else task.wait(0.08) end
+                            fireCombo()
+                            task.wait(HUNT.PostCombo)
+                        else
+                            task.wait(0.02)
+                        end
+                    else
+                        task.wait(0.08)
+                    end
                 end
-            else task.wait(0.05) end
+            else
+                task.wait(0.05)
+            end
         end
     end)
     task.spawn(function()
@@ -1010,10 +1061,10 @@ if CURRENT_GAME == "TSB" then
     makeToggle(combatTab, 100, "Auto Fight",   S.autoFight,   function(v) S.autoFight = v end)
     makeToggle(combatTab, 136, "Auto Serious", S.autoSerious, function(v) S.autoSerious = v end)
     makeSection(combatTab, 180, "TUNING")
-    makeSlider(combatTab, 200, "M1 Delay",     0.05, 0.30, HUNT.M1Delay,      function(v) HUNT.M1Delay = v end)
-    makeSlider(combatTab, 248, "Skill Delay",  0.05, 0.40, HUNT.SkillDelay,   function(v) HUNT.SkillDelay = v end)
-    makeSlider(combatTab, 296, "Dash Cooldown",0.15, 2.0,  HUNT.DashCooldown, function(v) HUNT.DashCooldown = v end)
-    makeSlider(combatTab, 344, "Strike Range", 3,    15,   HUNT.StrikeRange,  function(v) HUNT.StrikeRange = v end)
+    makeSlider(combatTab, 200, "Far Dash Range",   20, 80,  HUNT.FarDash,      function(v) HUNT.FarDash = v end)
+    makeSlider(combatTab, 248, "Side Dash Odds",   0,  1.0, HUNT.SideStepOdds, function(v) HUNT.SideStepOdds = v end)
+    makeSlider(combatTab, 296, "Dash Cooldown",    0.15, 2.0, HUNT.DashCooldown, function(v) HUNT.DashCooldown = v end)
+    makeSlider(combatTab, 344, "Stuck Timeout",    0.5, 5.0, HUNT.StuckTime,    function(v) HUNT.StuckTime = v end)
 end
 
 -- AIMBOT (MM2)
@@ -1057,8 +1108,8 @@ if tabContents["CONFIG"] then
     if CURRENT_GAME == "TSB" then
         makeSection(configTab, 80, "MOVEMENT")
         makeSlider(configTab, 100, "Lead Factor",    0,   0.5, HUNT.LeadFactor,   function(v) HUNT.LeadFactor = v end)
-        makeSlider(configTab, 148, "Side Dash Odds", 0,   1.0, HUNT.SideStepOdds, function(v) HUNT.SideStepOdds = v end)
-        makeSlider(configTab, 196, "Stuck Timeout",  0.5, 5.0, HUNT.StuckTime,    function(v) HUNT.StuckTime = v end)
+        makeSlider(configTab, 148, "Mid Walk Range", 5,   40,  HUNT.MidWalk,      function(v) HUNT.MidWalk = v end)
+        makeSlider(configTab, 196, "Strike Range",   3,   15,  HUNT.StrikeRange,  function(v) HUNT.StrikeRange = v end)
         makeSlider(configTab, 244, "Hit Recovery",   0.05,1.0, HUNT.HitRecovery,  function(v) HUNT.HitRecovery = v end)
     else
         makeSection(configTab, 80, "AIM")
