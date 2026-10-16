@@ -14,7 +14,7 @@ local plr     = Players.LocalPlayer
 -- ============================================================
 -- GAME DETECTION
 -- ============================================================
-local TSB_PLACE_ID = 107047579715724
+local TSB_PLACE_ID = 10449761463
 local MM2_PLACE_ID = 142823291
 
 local CURRENT_GAME = "UNSUPPORTED"
