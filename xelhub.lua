@@ -9,7 +9,6 @@ local VIM     = game:GetService("VirtualInputManager")
 local TweenService = game:GetService("TweenService")
 local TeleportService = game:GetService("TeleportService")
 local RunService = game:GetService("RunService")
-local GuiService = game:GetService("GuiService")
 local plr     = Players.LocalPlayer
 
 -- ============================================================
@@ -269,27 +268,22 @@ local function buildESPFor(character)
     end
 end
 
+-- Tight Gun ESP: only shows tools that are NOT in a player's hand/inventory
 local function buildGunESP()
     if CURRENT_GAME ~= "MM2" or not S.espGun then return end
     for _, obj in ipairs(workspace:GetDescendants()) do
-        local nameLower = obj.Name:lower()
-        local isGunOrKnife = (nameLower == "gun" or nameLower == "knife" or 
-                              nameLower:find("gun") or nameLower:find("knife"))
-        if isGunOrKnife and not obj:FindFirstChild("xel_gunESP") then
-            local basePart = nil
-            if obj:IsA("BasePart") then basePart = obj
-            elseif obj:IsA("Tool") then basePart = obj:FindFirstChildWhichIsA("BasePart")
-            elseif obj:IsA("Model") then basePart = obj:FindFirstChildWhichIsA("BasePart") end
-            if basePart then
-                local ancestorModel = basePart:FindFirstAncestorOfClass("Model")
-                local isOnPlayer = ancestorModel and Players:GetPlayerFromCharacter(ancestorModel)
-                if not isOnPlayer then
+        if obj:IsA("Tool") and (obj.Name == "Gun" or obj.Name == "Knife") then
+            local ancestorModel = obj:FindFirstAncestorOfClass("Model")
+            local isOnPlayer = ancestorModel and Players:GetPlayerFromCharacter(ancestorModel)
+            if not isOnPlayer and not obj:FindFirstChild("xel_gunESP") then
+                local handle = obj:FindFirstChild("Handle") or obj:FindFirstChildWhichIsA("BasePart")
+                if handle then
                     local bb = Instance.new("BillboardGui")
                     bb.Name = "xel_gunESP"
                     bb.Size = UDim2.new(0, 100, 0, 20)
-                    bb.StudsOffset = Vector3.new(0, 3, 0)
+                    bb.StudsOffset = Vector3.new(0, 2, 0)
                     bb.AlwaysOnTop = true
-                    bb.Parent = basePart
+                    bb.Parent = handle
                     local lbl = Instance.new("TextLabel")
                     lbl.Size = UDim2.new(1, 0, 1, 0)
                     lbl.BackgroundTransparency = 1
@@ -1118,10 +1112,10 @@ if tabContents["SUPPORT"] then
     makeSection(supportTab, 80, "CONTACT")
 
     local descLbl = Instance.new("TextLabel")
-    descLbl.Size = UDim2.new(1, 0, 0, 40)
+    descLbl.Size = UDim2.new(1, 0, 0, 50)
     descLbl.Position = UDim2.new(0, 0, 0, 100)
     descLbl.BackgroundTransparency = 1
-    descLbl.Text = "support or game reco,\nclick discord icon to add me"
+    descLbl.Text = "support or game reco,\nclick button below and paste it\nto add friends box in discord"
     descLbl.TextColor3 = TEXT_DIM
     descLbl.TextXAlignment = Enum.TextXAlignment.Left
     descLbl.TextYAlignment = Enum.TextYAlignment.Top
@@ -1129,35 +1123,38 @@ if tabContents["SUPPORT"] then
     descLbl.TextSize = 11
     descLbl.Parent = supportTab
 
-    local discordBtn = Instance.new("TextButton")
-    discordBtn.Size = UDim2.new(0, 44, 0, 44)
-    discordBtn.Position = UDim2.new(0, 0, 0, 152)
-    discordBtn.BackgroundColor3 = Color3.fromRGB(88, 101, 242)
-    discordBtn.Text = ""
-    discordBtn.BorderSizePixel = 0
-    discordBtn.AutoButtonColor = false
-    discordBtn.Parent = supportTab
-    Instance.new("UICorner", discordBtn).CornerRadius = UDim.new(0, 8)
+    local copyBtn = Instance.new("TextButton")
+    copyBtn.Size = UDim2.new(0, 180, 0, 36)
+    copyBtn.Position = UDim2.new(0, 0, 0, 168)
+    copyBtn.BackgroundColor3 = Color3.fromRGB(88, 101, 242)
+    copyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    copyBtn.Font = FONT_MONO
+    copyBtn.TextSize = 12
+    copyBtn.Text = "COPY USERNAME"
+    copyBtn.BorderSizePixel = 0
+    copyBtn.AutoButtonColor = false
+    copyBtn.Parent = supportTab
+    Instance.new("UICorner", copyBtn).CornerRadius = UDim.new(0, 4)
 
-    local discordIcon = Instance.new("ImageLabel")
-    discordIcon.Size = UDim2.new(0.6, 0, 0.6, 0)
-    discordIcon.Position = UDim2.new(0.2, 0, 0.2, 0)
-    discordIcon.BackgroundTransparency = 1
-    discordIcon.Image = "rbxassetid://16584754901"
-    discordIcon.ScaleType = Enum.ScaleType.Fit
-    discordIcon.Parent = discordBtn
-
-    discordBtn.MouseEnter:Connect(function()
-        tween(discordBtn, {BackgroundColor3 = Color3.fromRGB(110, 122, 255)}, 0.12)
+    copyBtn.MouseEnter:Connect(function()
+        tween(copyBtn, {BackgroundColor3 = Color3.fromRGB(110, 122, 255)}, 0.12)
     end)
-    discordBtn.MouseLeave:Connect(function()
-        tween(discordBtn, {BackgroundColor3 = Color3.fromRGB(88, 101, 242)}, 0.12)
+    copyBtn.MouseLeave:Connect(function()
+        tween(copyBtn, {BackgroundColor3 = Color3.fromRGB(88, 101, 242)}, 0.12)
     end)
 
-    discordBtn.MouseButton1Click:Connect(function()
-        local url = "https://discord.com/users/368204532905410570/"
-        pcall(function() setclipboard(url) end)
-        pcall(function() GuiService:OpenBrowserWindow(url) end)
+    local copied = false
+    copyBtn.MouseButton1Click:Connect(function()
+        pcall(function() setclipboard("a7ql") end)
+        if not copied then
+            copied = true
+            local orig = copyBtn.Text
+            copyBtn.Text = "COPIED!"
+            task.delay(1.5, function()
+                copyBtn.Text = orig
+                copied = false
+            end)
+        end
     end)
 end
 
