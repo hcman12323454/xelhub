@@ -314,40 +314,37 @@ local function refreshESP()
 end
 
 -- ============================================================
--- TSB COMBAT (upgraded — randomized routes, block-bail)
+-- TSB COMBAT (rewritten — simple, reliable)
 -- ============================================================
-local HUNT = {
-    FarDash = 45, MidWalk = 18, StrikeRange = 7,
-    DashCooldown = 0.35, DashHold = 0.12,
-    PostCombo = 0.05, StuckTime = 1.8, MissBail = 1,
-    LeadFactor = 0.25, SideStepOdds = 0.5, HitRecovery = 0.20,
+local COMBAT = {
+    Range           = 8,
+    ApproachRange   = 45,
+    WalkRange       = 20,
+    ComboDelay      = 0.115,
+    SkillDelay      = 0.15,
+    PostComboWait   = 0.10,
+    DashCooldown    = 0.5,
+    DashHold        = 0.12,
+    GiveUpTime      = 2.0,
 }
 
-local COMBO_ROUTES = {
-    {"M1","M1","M1","SLAM","4","SIDE","M1","M1","M1","2","3","FWD","M1","M1","M1","1"},
-    {"M1","M1","SLAM","4","SIDE","M1","M1","M1","2","FWD","3","M1","M1","1"},
-    {"M1","M1","M1","2","SIDE","M1","M1","3","FWD","M1","M1","1"},
-}
-
-local _stuckDist, _stuckTime = nil, 0
-local _lastHealth = nil
-local _lastHitTime = 0
-local _lastRoute = 0
+local _lastPos, _lastPosTime = nil, 0
+local _lastHealth, _lastHitTime = nil, 0
 
 task.spawn(function()
     while true do
         if S.hum then
             local hp = S.hum.Health
-            if _lastHealth and hp < _lastHealth then _lastHitTime = tick() end
+            if _lastHealth and hp < _lastHealth then
+                _lastHitTime = tick()
+            end
             _lastHealth = hp
         end
         task.wait(0.1)
     end
 end)
 
-local function justGotHit() return (tick() - _lastHitTime) < HUNT.HitRecovery end
-
-local function humanoidHealthy()
+local function humanoidOK()
     if not S.char or not S.char.Parent then return false end
     if not S.hum or not S.hum.Parent then
         local h = S.char:FindFirstChildOfClass("Humanoid")
@@ -356,120 +353,109 @@ local function humanoidHealthy()
     return S.hum and S.hum.Health > 0
 end
 
-local function autoDash(side)
-    local now = tick()
-    if now - S.lastDash < HUNT.DashCooldown then return end
-    S.lastDash = now
-    local dirKey = side and (math.random() < 0.5 and Enum.KeyCode.A or Enum.KeyCode.D) or Enum.KeyCode.W
-    holdKey(dirKey, HUNT.DashHold)
-    task.wait(math.random() * 0.04)
-    pressKey(Enum.KeyCode.Q)
+local function getTargetHP()
+    if not S.target or not S.target.Parent then return nil end
+    local h = S.target.Parent:FindFirstChildOfClass("Humanoid")
+    return h and h.Health or nil
 end
 
-local function predictiveFace(target)
+local function faceTarget(target)
     local me = hrp(); if not me or not target then return end
-    local vel = target.AssemblyLinearVelocity or Vector3.new()
-    local predicted = target.Position + vel * HUNT.LeadFactor
-    local flat = Vector3.new(predicted.X, me.Position.Y, predicted.Z)
-    if (flat - me.Position).Magnitude < 0.3 then return end
+    local flat = Vector3.new(target.Position.X, me.Position.Y, target.Position.Z)
+    if (flat - me.Position).Magnitude < 0.2 then return end
     me.CFrame = CFrame.new(me.Position, flat)
 end
 
-local function approach(target)
+local function doDash(side)
+    local now = tick()
+    if now - S.lastDash < COMBAT.DashCooldown then return end
+    S.lastDash = now
+    local key = side and (math.random() < 0.5 and Enum.KeyCode.A or Enum.KeyCode.D) or Enum.KeyCode.W
+    holdKey(key, COMBAT.DashHold)
+    pressKey(Enum.KeyCode.Q)
+end
+
+local function moveToward(target)
     if isMoving() then return end
     local me = hrp(); if not me or not target then return end
-    predictiveFace(target)
+    faceTarget(target)
     local dist = (target.Position - me.Position).Magnitude
-    if _stuckDist and math.abs(_stuckDist - dist) < 0.5 then
-        if tick() - _stuckTime > HUNT.StuckTime then S.target = nil; _stuckDist = nil; return end
+
+    if _lastPos and (me.Position - _lastPos).Magnitude < 0.3 then
+        if tick() - _lastPosTime > COMBAT.GiveUpTime then
+            S.target = nil
+            _lastPos = nil
+            return
+        end
     else
-        _stuckDist = dist; _stuckTime = tick()
+        _lastPos = me.Position
+        _lastPosTime = tick()
     end
-    if dist <= HUNT.StrikeRange then
+
+    if dist <= COMBAT.Range then
         S.hum:MoveTo(me.Position)
-    elseif dist <= HUNT.MidWalk then
+    elseif dist <= COMBAT.WalkRange then
         S.hum:MoveTo(target.Position)
-        if math.random() < 0.2 then autoDash(true) end
-    elseif dist <= HUNT.FarDash then
-        autoDash(math.random() < HUNT.SideStepOdds)
+    elseif dist <= COMBAT.ApproachRange then
+        doDash(math.random() < 0.5)
         S.hum:MoveTo(target.Position)
     else
         S.hum:MoveTo(target.Position)
     end
 end
 
-local function pickRoute()
-    local idx
-    repeat
-        idx = math.random(1, #COMBO_ROUTES)
-    until idx ~= _lastRoute or #COMBO_ROUTES == 1
-    _lastRoute = idx
-    return COMBO_ROUTES[idx]
-end
-
-local function fireCombo()
+local function doCombo()
     if S.busy then return end
     S.busy = true
+
     task.spawn(function()
-        local function shouldBail()
-            if not humanoidHealthy() then return true end
-            if not S.target or not S.target.Parent then return true end
-            return false
-        end
-        local function getTargetHP()
-            if not S.target or not S.target.Parent then return nil end
-            local h = S.target.Parent:FindFirstChildOfClass("Humanoid")
-            return h and h.Health or nil
+        local startHP = getTargetHP()
+
+        for i = 1, 3 do
+            if isMoving() or not humanoidOK() then S.busy = false; return end
+            clickM1()
+            task.wait(COMBAT.ComboDelay)
         end
 
-        pcall(function()
-            local route = pickRoute()
-            local hpStart = getTargetHP()
-            local m1sSinceCheck = 0
+        local midHP = getTargetHP()
+        if startHP and midHP and midHP >= startHP then
+            S.busy = false
+            return
+        end
 
-            for _, step in ipairs(route) do
-                if shouldBail() then return end
+        if isMoving() or not humanoidOK() then S.busy = false; return end
+        holdKey(Enum.KeyCode.Space, 0.1)
+        clickM1()
+        task.wait(COMBAT.SkillDelay)
 
-                if step == "M1" then
-                    clickM1()
-                    m1sSinceCheck = m1sSinceCheck + 1
-                    task.wait(0.105 + math.random() * 0.025)
+        if not humanoidOK() then S.busy = false; return end
+        pressKey(Enum.KeyCode.Four)
+        task.wait(COMBAT.SkillDelay)
 
-                    if m1sSinceCheck >= 1 then
-                        local hpNow = getTargetHP()
-                        if hpStart and hpNow and hpNow >= hpStart then
-                            S.busy = false
-                            autoDash(true)
-                            return
-                        end
-                        hpStart = hpNow
-                        m1sSinceCheck = 0
-                    end
-                elseif step == "SLAM" then
-                    holdKey(Enum.KeyCode.Space, 0.10)
-                    clickM1()
-                    task.wait(0.14 + math.random() * 0.03)
-                elseif step == "SIDE" then
-                    autoDash(true)
-                    task.wait(0.12)
-                elseif step == "FWD" then
-                    autoDash(false)
-                    task.wait(0.12)
-                else
-                    local keyMap = {
-                        ["1"] = Enum.KeyCode.One,
-                        ["2"] = Enum.KeyCode.Two,
-                        ["3"] = Enum.KeyCode.Three,
-                        ["4"] = Enum.KeyCode.Four,
-                    }
-                    if keyMap[step] then
-                        pressKey(keyMap[step])
-                        task.wait(0.14 + math.random() * 0.03)
-                    end
-                end
-            end
-            task.wait(0.10)
-        end)
+        for i = 1, 3 do
+            if isMoving() or not humanoidOK() then S.busy = false; return end
+            clickM1()
+            task.wait(COMBAT.ComboDelay)
+        end
+
+        if not humanoidOK() then S.busy = false; return end
+        pressKey(Enum.KeyCode.Two)
+        task.wait(COMBAT.SkillDelay)
+
+        if not humanoidOK() then S.busy = false; return end
+        pressKey(Enum.KeyCode.Three)
+        task.wait(COMBAT.SkillDelay)
+
+        for i = 1, 3 do
+            if isMoving() or not humanoidOK() then S.busy = false; return end
+            clickM1()
+            task.wait(COMBAT.ComboDelay)
+        end
+
+        if not humanoidOK() then S.busy = false; return end
+        pressKey(Enum.KeyCode.One)
+        task.wait(0.1)
+
         S.busy = false
     end)
 end
@@ -477,26 +463,30 @@ end
 if CURRENT_GAME == "TSB" then
     task.spawn(function()
         while true do
-            if S.autoFight and humanoidHealthy() then
-                if justGotHit() then
-                    task.wait(0.03)
+            if S.autoFight and humanoidOK() then
+                if tick() - _lastHitTime < 0.2 then
+                    task.wait(0.05)
                 else
                     local me = hrp()
-                    if not S.target or not S.target.Parent or not isValidTarget(S.target.Parent, true)
+
+                    if not S.target or not S.target.Parent
+                       or not isValidTarget(S.target.Parent, true)
                        or (me and (S.target.Position - me.Position).Magnitude > CONFIG.ChaseRange) then
-                        S.target = findTarget(true); _stuckDist = nil
+                        S.target = findTarget(true)
+                        _lastPos = nil
                     end
+
                     if S.target then
-                        approach(S.target)
+                        moveToward(S.target)
                         local dist = (S.target.Position - me.Position).Magnitude
-                        if dist <= HUNT.StrikeRange + 1 and not isMoving() then
-                            fireCombo()
-                            task.wait(HUNT.PostCombo)
+                        if dist <= COMBAT.Range + 1 and not isMoving() then
+                            doCombo()
+                            task.wait(COMBAT.PostComboWait)
                         else
-                            task.wait(0.02)
+                            task.wait(0.03)
                         end
                     else
-                        task.wait(0.08)
+                        task.wait(0.1)
                     end
                 end
             else
@@ -504,15 +494,16 @@ if CURRENT_GAME == "TSB" then
             end
         end
     end)
+
     task.spawn(function()
         while true do
-            if S.autoSerious and S.hum and S.hum.Health > 0 then pressKey(Enum.KeyCode.G) end
+            if S.autoSerious and S.hum and S.hum.Health > 0 then
+                pressKey(Enum.KeyCode.G)
+            end
             task.wait(1.0)
         end
     end)
-end
-
--- ============================================================
+end-- ============================================================
 -- MM2 FEATURES
 -- ============================================================
 local FOVCircle = nil
